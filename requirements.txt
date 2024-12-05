@@ -1,31 +1,9 @@
-# Streamlit App Dependencies
-
-# Streamlit for the web application
-streamlit==1.24.1
-
-# Data manipulation and analysis
-pandas==1.5.3
-numpy==1.24.3
-
-# Fuzzy string matching using thefuzz
-thefuzz==0.18.0
-python-Levenshtein==0.12.2  # Enhances performance of thefuzz
-
-# Plotting and visualization
-plotly==5.15.0
-
-# Machine Learning and optimization
-scikit-learn==1.2.2
-skfolio==0.3.0
-
-# Date and time handling
-jdatetime==3.6.3
-
-# Excel file handling
-openpyxl==3.1.2
-
-# Custom API for symbol data (ensure this is the correct package name and version)
-tsetmc_api==0.0.1
-
-# Additional Dependencies (if any)
-# Add any other packages your app requires below
+streamlit
+numpy
+pandas
+scikit-learn
+plotly
+fuzzywuzzy
+jdatetime
+openpyxl
+skfolio
