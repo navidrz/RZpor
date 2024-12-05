@@ -7,7 +7,7 @@ streamlit==1.24.1
 pandas==1.5.3
 numpy==1.24.3
 
-# Fuzzy string matching (replacing fuzzywuzzy with thefuzz for better maintenance)
+# Fuzzy string matching using thefuzz
 thefuzz==0.18.0
 python-Levenshtein==0.12.2  # Enhances performance of thefuzz
 
@@ -26,8 +26,6 @@ openpyxl==3.1.2
 
 # Custom API for symbol data (ensure this is the correct package name and version)
 tsetmc_api==0.0.1
-
-# Asynchronous operations and logging (standard libraries, no need to include)
 
 # Additional Dependencies (if any)
 # Add any other packages your app requires below
