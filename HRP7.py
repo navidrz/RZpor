@@ -1,35 +1,37 @@
-# hrp_streamlit_app_enhanced_with_advanced_weight_forms.py
+# hrp_streamlit_app_updated_with_Database.py
 
 # %%
 # =================================
-# Hierarchical Risk Parity, HERC & NCO with Advanced Weight Forms - Streamlit App (Enhanced Version)
+# Hierarchical Risk Parity, HERC & NCO with Spearman & Distance Correlation - Streamlit App (Updated Version)
 # =================================
 
 """
-این برنامه استریم‌لیت، بهینه‌سازی Hierarchical Risk Parity (HRP)، Hierarchical Equal Risk Contribution (HERC) و Nested Clusters Optimization (NCO) را با استفاده از فرم‌های پیشرفته‌تر و سفارشی‌تر برای تنظیم وزن‌های حداقل و حداکثر دارایی‌ها بهبود می‌بخشد. این برنامه به شما امکان می‌دهد داده‌های مورد نیاز را بارگذاری کرده، تنظیمات مدل را به صورت تعاملی و دقیق‌تر تنظیم کنید و پورتفوی بهینه را به صورت پویا مشاهده و تحلیل کنید.
+این برنامه استریم‌لیت، بهینه‌سازی Hierarchical Risk Parity (HRP)، Hierarchical Equal Risk Contribution (HERC) و Nested Clusters Optimization (NCO) را با استفاده از متغیرهای وابسته (y) و فاصله‌سنجی Spearman و Distance Correlation بهبود می‌بخشد. این برنامه به شما امکان می‌دهد داده‌های مورد نیاز را از دیتابیس موجود بارگذاری کرده، پارامترهای مدل را تنظیم کنید و پورتفوی بهینه را به صورت پویا مشاهده و تحلیل کنید.
 """
 
 # %%
 # Import Necessary Libraries
 # ==========================
-import asyncio
+import os  # برای بررسی وجود فایل دیتابیس
 import logging
 from datetime import datetime
-import sys
 import re
 import pandas as pd
 import numpy as np
 import streamlit as st
-from thefuzz import fuzz, process
-from plotly.io import to_html
+from fuzzywuzzy import fuzz, process
 from sklearn.model_selection import train_test_split
-from tsetmc_api.symbol import Symbol  # Ensure this is the correct import for the Symbol class
 
-from skfolio import Population, RiskMeasure, RatioMeasure  # وارد کردن RatioMeasure
+from skfolio import Population, RiskMeasure, RatioMeasure
 from skfolio.cluster import HierarchicalClustering, LinkageMethod
-from skfolio.distance import KendallDistance, SpearmanDistance, DistanceCorrelation  # وارد کردن DistanceCorrelation
-from skfolio.optimization import (EqualWeighted, HierarchicalRiskParity, DistributionallyRobustCVaR,
-                                   HierarchicalEqualRiskContribution, NestedClustersOptimization, BaseHierarchicalOptimization)
+from skfolio.distance import KendallDistance, SpearmanDistance, DistanceCorrelation
+from skfolio.optimization import (
+    EqualWeighted,
+    HierarchicalRiskParity,
+    DistributionallyRobustCVaR,
+    HierarchicalEqualRiskContribution,
+    NestedClustersOptimization
+)
 from skfolio.prior import FactorModel
 
 import jdatetime
@@ -45,11 +47,6 @@ logger = logging.getLogger(__name__)
 # %%
 # Utility Functions
 # =================
-def validate_symbol_ids(symbol_ids: list) -> bool:
-    """Validates that all symbol IDs are numeric."""
-    pattern = re.compile(r'^\d+$')
-    return all(pattern.match(id_) for id_ in symbol_ids)
-
 def get_table_download_link(df, filename, link_text):
     """
     Generates a download link for a pandas DataFrame.
@@ -74,234 +71,87 @@ def get_table_download_link(df, filename, link_text):
         return "#"
 
 # %%
-# DataFetcher Class
-# =================
-class DataFetcher:
-    """Class responsible for fetching and processing data from the API."""
+# DatabaseLoader Class
+# ====================
+class DatabaseLoader:
+    """Class responsible for loading and processing data from the database."""
 
     @staticmethod
-    async def fetch_daily_history(symbol_id: str) -> pd.DataFrame:
+    def load_database(database_file: str) -> pd.DataFrame:
         """
-        Fetches the daily history of a symbol asynchronously with logging and error handling.
-        Converts dates from Jalali to Gregorian if necessary.
+        Loads the database from a CSV file.
 
         Parameters:
         -----------
-        symbol_id : str
-            The unique identifier for the symbol.
+        database_file : str
+            Path to the database CSV file.
 
         Returns:
         --------
         pd.DataFrame
-            DataFrame containing 'date', 'close', 'volume', 'value' columns.
+            Loaded DataFrame.
         """
         try:
-            logger.info(f"Start fetching daily history for symbol_id: {symbol_id}")
-            symbol = Symbol(symbol_id=symbol_id)
-            daily_history = await symbol.get_daily_history_async()
-
-            if not daily_history:
-                logger.warning(f"No daily history data retrieved for symbol_id: {symbol_id}")
+            if not os.path.exists(database_file):
+                logger.error(f"Database file '{database_file}' does not exist.")
                 return pd.DataFrame()
 
-            stock_data = []
-            for row in daily_history:
-                try:
-                    # Convert Jalali dates to Gregorian if necessary
-                    if isinstance(row.date, jdatetime.date):
-                        gregorian_date = pd.to_datetime(row.date.togregorian()).normalize()
-                    elif isinstance(row.date, datetime):
-                        gregorian_date = pd.to_datetime(row.date).normalize()
-                    else:
-                        gregorian_date = pd.NaT
-                        logger.warning(f"Unknown date format for row: {row}")
-
-                    stock_data.append({
-                        'date': gregorian_date,
-                        'close': row.close,
-                        'volume': row.volume,
-                        'value': row.value
-                    })
-                except Exception as e:
-                    logger.warning(f"Skipping invalid date value: {row.date} - {e}")
-
-            stock_df = pd.DataFrame(stock_data).dropna(subset=['date'])
-            stock_df = stock_df.sort_values('date').drop_duplicates(subset='date')  # Remove duplicate dates
-            stock_df['close'] = pd.to_numeric(stock_df['close'], errors='coerce')
-            stock_df = stock_df.dropna(subset=['close'])
-            logger.info(f"Successfully fetched and converted daily history for symbol_id: {symbol_id}")
-            if not stock_df.empty:
-                logger.info(f"Date Range for symbol_id {symbol_id}: {stock_df['date'].min()} to {stock_df['date'].max()}")
-            return stock_df
+            logger.info(f"Loading database from '{database_file}'...")
+            database = pd.read_csv(database_file)
+            logger.info("Database loaded successfully.")
+            return database
         except Exception as e:
-            logger.error(f"Error fetching daily history for symbol_id: {symbol_id} - {e}")
+            logger.error(f"Error loading database: {e}")
             return pd.DataFrame()
 
     @staticmethod
-    async def fetch_all_symbols(symbol_ids: list) -> dict:
+    def preprocess_database(database: pd.DataFrame) -> tuple:
         """
-        Fetches daily history data for all symbols asynchronously.
+        Preprocesses the loaded database.
 
         Parameters:
         -----------
-        symbol_ids : list
-            List of symbol IDs to fetch data for.
+        database : pd.DataFrame
+            Loaded database DataFrame.
 
         Returns:
         --------
-        dict
-            Dictionary mapping symbol IDs to their fetched DataFrames.
-        """
-        tasks = [DataFetcher.fetch_daily_history(symbol_id) for symbol_id in symbol_ids]
-        results = await asyncio.gather(*tasks)
-        return dict(zip(symbol_ids, results))
-
-# %%
-# DataLoader Class
-# ================
-class DataLoader:
-    """Class responsible for loading and processing external data files."""
-
-    @staticmethod
-    def validate_data(df: pd.DataFrame, required_columns: list, file_type: str) -> bool:
-        """
-        Validates that the DataFrame contains all required columns.
-
-        Parameters:
-        -----------
-        df : pd.DataFrame
-            DataFrame to validate.
-        required_columns : list
-            List of required column names.
-        file_type : str
-            Type of data file.
-
-        Returns:
-        --------
-        bool
-            True if all required columns are present, False otherwise.
-        """
-        missing = [col for col in required_columns if col not in df.columns]
-        if missing:
-            logger.error(f"Missing columns {missing} in {file_type} data.")
-            return False
-        return True
-
-    @staticmethod
-    def load_data(file_type: str, file_content) -> pd.DataFrame:
-        """
-        Loads data from uploaded file content.
-
-        Parameters:
-        -----------
-        file_type : str
-            Type of data to load ('market', 'risk_free_rate', 'market_cap', 'usd_to_rial').
-        file_content : BytesIO
-            Uploaded file content.
-
-        Returns:
-        --------
-        pd.DataFrame
-            Loaded and processed DataFrame with standardized column names.
+        tuple
+            Tuple containing symbol_data, market_returns, risk_free_rate, market_cap, usd_to_rial DataFrames/Series.
         """
         try:
-            # Determine file extension
-            file_extension = file_content.name.split('.')[-1].lower()
+            # بررسی وجود ستون‌های مورد نیاز
+            required_columns = ['date', 'symbol_id', 'close', 'volume', 'value', 'daily_return', 'risk_free_rate', 'market_cap', 'usd_to_rial']
+            missing_columns = [col for col in required_columns if col not in database.columns]
+            if missing_columns:
+                logger.error(f"The database is missing the following required columns: {missing_columns}")
+                return None, None, None, None, None
 
-            if file_extension in ['xlsx', 'xls']:
-                df = pd.read_excel(file_content, index_col=None)
-            elif file_extension == 'csv':
-                df = pd.read_csv(file_content, index_col=None)
-            else:
-                logger.error("Unsupported file format uploaded.")
-                return pd.DataFrame()
+            # تبدیل 'symbol_id' به رشته‌ای (string) برای تطبیق صحیح
+            database['symbol_id'] = database['symbol_id'].astype(str).str.strip()
 
-            logger.info(f"Loaded {file_type} data from uploaded file.")
+            # تبدیل تاریخ به datetime و تنظیم آن به عنوان index
+            database['date'] = pd.to_datetime(database['date'], errors='coerce').dt.normalize()
+            database = database.dropna(subset=['date'])
+            database = database.sort_values(['symbol_id', 'date']).reset_index(drop=True)
 
-            # Define required fields based on file type
-            required_fields = {}
-            if file_type == 'market':
-                required_fields = {
-                    'date': ['date', 'Date', 'Gregorian Date', 'تاریخ میلادی'],
-                    'daily_return': ['return', 'daily return', 'بازده', 'بازده روزانه'],
-                }
-            elif file_type == 'risk_free_rate':
-                required_fields = {
-                    'date': ['date', 'Date', 'Gregorian Date', 'تاریخ میلادی'],
-                    'risk_free_rate': ['ytm', 'YTM', 'Yield to Maturity', 'Interest Rate', 'Risk-Free Rate'],
-                }
-            elif file_type == 'market_cap':
-                required_fields = {
-                    'date': ['date', 'Date', 'Gregorian Date', 'تاریخ میلادی'],
-                    'market_cap': ['market_cap', 'Market Cap', 'Market Capitalization', 'بازار سرمایه', 'price'],
-                }
-            elif file_type == 'usd_to_rial':
-                required_fields = {
-                    'date': ['date', 'Date', 'Gregorian Date', 'تاریخ میلادی'],
-                    'usd_to_rial': ['usd_to_rial', 'USD to Rial', 'Exchange Rate', 'نرخ تبدیل دلار به ریال', 'price'],
-                }
+            # حذف ستون اضافی 'مقدار' اگر وجود داشته باشد
+            if 'مقدار' in database.columns:
+                database = database.drop(columns=['مقدار'])
 
-            # Normalize column names
-            normalized_columns = {col.strip().lower(): col for col in df.columns}
-            mapped_columns = {}
+            # استخراج داده‌ها
+            logger.info("Processing database data...")
+            symbol_data = database.pivot_table(index='date', columns='symbol_id', values='close')
+            market_returns = database.groupby('date')['daily_return'].first().rename("market_returns")
+            risk_free_rate = database.groupby('date')['risk_free_rate'].first()
+            market_cap = database.groupby('date')['market_cap'].first()
+            usd_to_rial = database.groupby('date')['usd_to_rial'].first()
 
-            for field, possible_names in required_fields.items():
-                # Attempt to find the best match for the field
-                best_match, score = process.extractOne(field, list(normalized_columns.keys()), scorer=fuzz.token_sort_ratio)
-                if score >= 90:
-                    original_col = normalized_columns[best_match]
-                    mapped_columns[field] = original_col
-                    logger.info(f"Mapped '{field}' to column '{original_col}' with score {score}")
-                else:
-                    # Try alternative names
-                    best_alt_match = None
-                    best_alt_score = 0
-                    for alt_name in possible_names:
-                        alt_name_normalized = alt_name.strip().lower()
-                        match, alt_score = process.extractOne(
-                            query=alt_name_normalized,
-                            choices=list(normalized_columns.keys()),
-                            scorer=fuzz.token_sort_ratio
-                        )
-                        if alt_score > best_alt_score and alt_score >= 90:
-                            best_alt_match = normalized_columns.get(match)
-                            best_alt_score = alt_score
-                    if best_alt_match:
-                        mapped_columns[field] = best_alt_match
-                        logger.info(f"Mapped '{field}' to column '{best_alt_match}' with score {best_alt_score}")
-                    else:
-                        logger.error(f"Required column for '{field}' not found in {file_type} data.")
-                        return pd.DataFrame()
-
-            # Rename columns to standardized names
-            rename_mapping = {mapped_columns[field]: field for field in required_fields}
-            df = df.rename(columns=rename_mapping)
-
-            # Validate required columns
-            if not DataLoader.validate_data(df, required_fields.keys(), file_type):
-                return pd.DataFrame()
-
-            # Convert 'date' column to datetime and normalize to remove time components
-            df['date'] = pd.to_datetime(df['date'], errors='coerce').dt.normalize()
-            df = df.dropna(subset=['date'])
-            df = df.sort_values('date').drop_duplicates(subset='date')  # Remove duplicate dates
-
-            # Log the date range
-            start_date = df['date'].min()
-            end_date = df['date'].max()
-            logger.info(f"{file_type.capitalize()} Data Date Range: {start_date} to {end_date}")
-
-            # For numeric columns, ensure correct data types
-            numeric_fields = [field for field in required_fields if field != 'date']
-            for field in numeric_fields:
-                df[field] = pd.to_numeric(df[field], errors='coerce')
-
-            df = df.dropna(subset=numeric_fields)  # Drop rows with NaNs in required numeric fields
-            logger.info(f"Successfully loaded and processed {file_type} data.")
-            return df
+            logger.info("Data extracted and pivoted successfully.")
+            return symbol_data, market_returns, risk_free_rate, market_cap, usd_to_rial
         except Exception as e:
-            logger.error(f"Error data loader: {e}")
-            return pd.DataFrame()
+            logger.error(f"Error preprocessing database: {e}")
+            return None, None, None, None, None
 
 # %%
 # Preprocessor Class
@@ -657,8 +507,8 @@ class Evaluator:
             return None
 
 # %%
-# Streamlit App Layout with Advanced Weight Forms
-# ===============================================
+# Streamlit App Layout
+# =====================
 def main():
     st.set_page_config(page_title="HRP, HERC & NCO Portfolio Optimization with Economic Factors", layout="wide")
     st.title("Hierarchical Risk Parity (HRP), Hierarchical Equal Risk Contribution (HERC) & Nested Clusters Optimization (NCO) Portfolio Optimization with Economic Factors")
@@ -669,695 +519,589 @@ def main():
     if 'weights_df' not in st.session_state:
         st.session_state['weights_df'] = pd.DataFrame()
 
-    # Sidebar for Configuration using Tabs
+    # Sidebar for Configuration
     st.sidebar.header("Configuration")
-    config_tabs = st.sidebar.tabs(["Upload Data", "Symbol IDs", "Model Settings"])
 
-    # ==============================
-    # Upload Data Files Tab
-    # ==============================
-    with config_tabs[0]:
-        with st.expander("Upload Data Files", expanded=True):
-            market_file = st.file_uploader("Market Index Data File (Excel/CSV)", type=["xlsx", "xls", "csv"])
-            risk_free_rate_file = st.file_uploader("Risk-Free Rate Data File (Excel/CSV)", type=["xlsx", "xls", "csv"])
-            market_cap_file = st.file_uploader("Market Cap in USD Data File (Excel/CSV)", type=["xlsx", "xls", "csv"])
-            usd_to_rial_file = st.file_uploader("USD to Rial Exchange Rate Data File (Excel/CSV)", type=["xlsx", "xls", "csv"])
+    # Symbol IDs Input
+    with st.sidebar.expander("Symbol IDs", expanded=True):
+        symbol_ids_input = st.text_area(
+            "Enter Symbol IDs separated by commas or newlines",
+            value="13243992182070788",
+            help="Input the symbol IDs you wish to analyze, separated by commas or newlines."
+        )
+        # تابع برای پردازش ورودی Symbol ID
+        portfolio_symbol_ids = [id_.strip() for id_ in symbol_ids_input.replace(',', '\n').split('\n') if id_.strip()]
 
-    # ==============================
-    # Symbol IDs Tab
-    # ==============================
-    with config_tabs[1]:
-        with st.expander("Enter Symbol IDs", expanded=True):
-            symbol_ids_input = st.text_area(
-                "Enter Symbol IDs separated by commas",
-                value="17914401175772326,66682662312253625,28374437855144739",
-                help="Input the symbol IDs you wish to analyze, separated by commas."
-            )
-            portfolio_symbol_ids = [id_.strip() for id_ in symbol_ids_input.split(",")]
+    # Model Parameters
+    with st.sidebar.expander("Model Parameters", expanded=True):
+        linkage_methods = st.multiselect(
+            "Linkage Methods",
+            options=["average", "complete", "single", "ward"],
+            default=["average", "complete"],
+            help="Select the linkage methods to use in hierarchical clustering."
+        )
+        distance_estimators = st.multiselect(
+            "Distance Estimators",
+            options=["Pearson", "Kendall", "Spearman", "DistanceCorrelation"],  # افزودن "DistanceCorrelation"
+            default=["Pearson", "Kendall", "Spearman"],
+            help="Select the distance estimators to use."
+        )
+        risk_aversion = st.slider("Risk Aversion", 0.5, 2.0, 1.0, step=0.1)
+        cvar_beta = st.slider("CVaR Beta", 0.90, 0.99, 0.95, step=0.01)
+        wasserstein_ball_radius = st.slider("Wasserstein Ball Radius", 0.01, 0.05, 0.02, step=0.01)
 
-    # ==============================
-    # Model Settings Tab
-    # ==============================
-    with config_tabs[2]:
-        with st.expander("Model Parameters", expanded=True):
-            # Use Columns for better layout
-            col1, col2 = st.columns(2)
+        # افزودن تنظیمات مربوط به NCO در رابط کاربری
+        st.markdown("### Nested Clusters Optimization (NCO) Parameters")
+        nco_inner_estimator = st.selectbox(
+            "NCO Inner Estimator",
+            options=["MeanRisk", "HierarchicalRiskParity", "DistributionallyRobustCVaR"],
+            index=0,
+            help="Select the inner estimator for NCO."
+        )
+        nco_outer_estimator = st.selectbox(
+            "NCO Outer Estimator",
+            options=["MeanRisk", "HierarchicalRiskParity", "DistributionallyRobustCVaR"],
+            index=0,
+            help="Select the outer estimator for NCO."
+        )
+        nco_clustering_method = st.selectbox(
+            "NCO Clustering Method",
+            options=["HierarchicalClustering", "KMeans"],
+            index=0,
+            help="Select the clustering method for NCO."
+        )
+        nco_cv = st.selectbox(
+            "NCO Cross-Validation Strategy",
+            options=["ignore", "5-fold", "10-fold"],
+            index=0,
+            help="Select the cross-validation strategy for NCO."
+        )
+        nco_quantile = st.slider("NCO Quantile", 0.0, 1.0, 0.5, step=0.05)
+        nco_quantile_measure = st.selectbox(
+            "NCO Quantile Measure",
+            options=["Sharpe Ratio", "Sortino Ratio"],  # حذف "Maximum Drawdown"
+            index=0,
+            help="Select the quantile measure for NCO."
+        )
+        nco_n_jobs = st.number_input(
+            "NCO Number of Jobs",
+            min_value=-1,
+            max_value=32,
+            value=-1,
+            step=1,
+            help="Number of jobs to run in parallel for NCO. -1 means using all processors."
+        )
 
-            with col1:
-                linkage_methods = st.multiselect(
-                    "Linkage Methods",
-                    options=["average", "complete", "single", "ward"],
-                    default=["average", "complete"],
-                    help="Select the linkage methods to use in hierarchical clustering."
-                )
-                distance_estimators = st.multiselect(
-                    "Distance Estimators",
-                    options=["Pearson", "Kendall", "Spearman", "DistanceCorrelation"],  # افزودن "DistanceCorrelation"
-                    default=["Pearson", "Kendall", "Spearman"],
-                    help="Select the distance estimators to use."
-                )
-                risk_aversion = st.slider("Risk Aversion", 0.5, 2.0, 1.0, step=0.1)
-                cvar_beta = st.slider("CVaR Beta", 0.90, 0.99, 0.95, step=0.01)
-                wasserstein_ball_radius = st.slider("Wasserstein Ball Radius", 0.01, 0.05, 0.02, step=0.01)
+        # افزودن تنظیمات مربوط به SpearmanDistance
+        st.markdown("### Spearman Distance Parameters")
+        spearman_absolute = st.checkbox(
+            "Apply Absolute Transformation",
+            value=False,
+            help="If checked, the absolute transformation is applied to the Spearman correlation matrix."
+        )
+        spearman_power = st.slider(
+            "Spearman Distance Power",
+            0.1, 3.0, 1.0, step=0.1,
+            help="Exponent of the power transformation applied to the Spearman correlation matrix."
+        )
 
-            with col2:
-                # افزودن تنظیمات مربوط به NCO در رابط کاربری
-                st.markdown("### Nested Clusters Optimization (NCO) Parameters")
-                nco_inner_estimator = st.selectbox(
-                    "NCO Inner Estimator",
-                    options=["MeanRisk", "HierarchicalRiskParity", "DistributionallyRobustCVaR"],
-                    index=0,
-                    help="Select the inner estimator for NCO."
-                )
-                nco_outer_estimator = st.selectbox(
-                    "NCO Outer Estimator",
-                    options=["MeanRisk", "HierarchicalRiskParity", "DistributionallyRobustCVaR"],
-                    index=0,
-                    help="Select the outer estimator for NCO."
-                )
-                nco_clustering_method = st.selectbox(
-                    "NCO Clustering Method",
-                    options=["HierarchicalClustering", "KMeans"],
-                    index=0,
-                    help="Select the clustering method for NCO."
-                )
-                nco_cv = st.selectbox(
-                    "NCO Cross-Validation Strategy",
-                    options=["ignore", "5-fold", "10-fold"],
-                    index=0,
-                    help="Select the cross-validation strategy for NCO."
-                )
-                nco_quantile = st.slider("NCO Quantile", 0.0, 1.0, 0.5, step=0.05)
-                nco_quantile_measure = st.selectbox(
-                    "NCO Quantile Measure",
-                    options=["Sharpe Ratio", "Sortino Ratio"],  # حذف "Maximum Drawdown"
-                    index=0,
-                    help="Select the quantile measure for NCO."
-                )
-                nco_n_jobs = st.number_input(
-                    "NCO Number of Jobs",
-                    min_value=-1,
-                    max_value=32,
-                    value=-1,
-                    step=1,
-                    help="Number of jobs to run in parallel for NCO. -1 means using all processors."
-                )
+        # افزودن تنظیمات مربوط به DistanceCorrelation
+        st.markdown("### Distance Correlation Parameters")
+        distance_correlation_threshold = st.slider(
+            "Distance Correlation Threshold",
+            0.1, 1.0, 0.5, step=0.1,
+            help="Distance correlation threshold."
+        )
 
-            # افزودن تنظیمات مربوط به SpearmanDistance و DistanceCorrelation
-            st.markdown("### Spearman Distance Parameters")
-            spearman_absolute = st.checkbox(
-                "Apply Absolute Transformation",
-                value=False,
-                help="If checked, the absolute transformation is applied to the Spearman correlation matrix."
-            )
-            spearman_power = st.slider(
-                "Spearman Distance Power",
-                0.1, 3.0, 1.0, step=0.1,
-                help="Exponent of the power transformation applied to the Spearman correlation matrix."
-            )
-
-            st.markdown("### Distance Correlation Parameters")
-            distance_correlation_threshold = st.slider(
-                "Distance Correlation Threshold",
-                0.1, 1.0, 0.5, step=0.1,
-                help="Distance correlation threshold."
-            )
-
-            # افزودن تنظیمات مربوط به BaseHierarchicalOptimization
-            st.markdown("### Base Hierarchical Optimization Parameters")
-            min_weights_option = st.selectbox(
-                "Min Weights Type",
-                options=["Uniform", "Custom"],
-                index=0,
-                help="Select how to define minimum weights for assets."
-            )
-            if min_weights_option == "Uniform":
-                min_weight_uniform = st.slider(
-                    "Minimum Weight (Uniform)",
-                    0.0, 1.0, 0.0, step=0.01,
-                    help="Uniform minimum weight applied to all assets."
-                )
-                min_weights = min_weight_uniform
-            else:
-                st.markdown("#### Custom Minimum Weights")
-                # نمایش جدول قابل ویرایش برای وارد کردن min_weights
-                min_weights_df = st.data_editor(
-                    pd.DataFrame({
-                        'Asset': [],  # نام دارایی‌ها به صورت خودکار پر می‌شود
-                        'Min Weight': []
-                    }),
-                    num_rows="dynamic",
-                    use_container_width=True,
-                    key='min_weights_table',
-                    label="Enter Custom Minimum Weights for Each Asset"
-                )
-                if not min_weights_df.empty:
-                    # اعتبارسنجی داده‌ها
-                    if 'Asset' in min_weights_df.columns and 'Min Weight' in min_weights_df.columns:
-                        # اطمینان از اینکه نام دارایی‌ها یکتا هستند
-                        if min_weights_df['Asset'].duplicated().any():
-                            st.error("Asset names must be unique in the Minimum Weights table.")
-                            min_weights = 0.0  # Default value
-                        else:
-                            # تبدیل جدول به دیکشنری
-                            min_weights = dict(zip(min_weights_df['Asset'], min_weights_df['Min Weight']))
-                    else:
-                        st.error("Minimum Weights table must have 'Asset' and 'Min Weight' columns.")
-                        min_weights = 0.0  # Default value
-                else:
-                    min_weights = 0.0  # Default value
-
-            max_weights_option = st.selectbox(
-                "Max Weights Type",
-                options=["Uniform", "Custom"],
-                index=0,
-                help="Select how to define maximum weights for assets."
-            )
-            if max_weights_option == "Uniform":
-                max_weight_uniform = st.slider(
-                    "Maximum Weight (Uniform)",
-                    0.0, 1.0, 1.0, step=0.01,
-                    help="Uniform maximum weight applied to all assets."
-                )
-                max_weights = max_weight_uniform
-            else:
-                st.markdown("#### Custom Maximum Weights")
-                # نمایش جدول قابل ویرایش برای وارد کردن max_weights
-                max_weights_df = st.data_editor(
-                    pd.DataFrame({
-                        'Asset': [],  # نام دارایی‌ها به صورت خودکار پر می‌شود
-                        'Max Weight': []
-                    }),
-                    num_rows="dynamic",
-                    use_container_width=True,
-                    key='max_weights_table',
-                    label="Enter Custom Maximum Weights for Each Asset"
-                )
-                if not max_weights_df.empty:
-                    # اعتبارسنجی داده‌ها
-                    if 'Asset' in max_weights_df.columns and 'Max Weight' in max_weights_df.columns:
-                        # اطمینان از اینکه نام دارایی‌ها یکتا هستند
-                        if max_weights_df['Asset'].duplicated().any():
-                            st.error("Asset names must be unique in the Maximum Weights table.")
-                            max_weights = 1.0  # Default value
-                        else:
-                            # تبدیل جدول به دیکشنری
-                            max_weights = dict(zip(max_weights_df['Asset'], max_weights_df['Max Weight']))
-                    else:
-                        st.error("Maximum Weights table must have 'Asset' and 'Max Weight' columns.")
-                        max_weights = 1.0  # Default value
-                else:
-                    max_weights = 1.0  # Default value
-
-            transaction_costs_uniform = st.slider(
-                "Transaction Costs (Uniform)",
-                0.0, 1.0, 0.0, step=0.01,
-                help="Uniform transaction costs applied to all assets."
-            )
-            transaction_costs = transaction_costs_uniform
-
-            management_fees_uniform = st.slider(
-                "Management Fees (Uniform)",
-                0.0, 1.0, 0.0, step=0.01,
-                help="Uniform management fees applied to all assets."
-            )
-            management_fees = management_fees_uniform
-
-    # ==============================
     # Start Button
-    # ==============================
-    run_optimization = st.sidebar.button("Run HRP, HERC & NCO Optimization")
+    start_button = st.sidebar.button("Run HRP, HERC & NCO Optimization")
 
     # ==============================
-    # Data Upload and Validation
+    # Data Loading and Validation
     # ==============================
-    st.header("1. Upload Data Files")
-    data_files = {}
-    if market_file and risk_free_rate_file and market_cap_file and usd_to_rial_file:
-        data_files = {
-            'market': DataLoader.load_data('market', market_file),
-            'risk_free_rate': DataLoader.load_data('risk_free_rate', risk_free_rate_file),
-            'market_cap': DataLoader.load_data('market_cap', market_cap_file),
-            'usd_to_rial': DataLoader.load_data('usd_to_rial', usd_to_rial_file)
-        }
+    st.header("1. Load Price Database")
+    database_file = "complete_price_database.csv"  # نام فایل دیتابیس خود را تنظیم کنید
 
-        # Check if all data files are loaded successfully
-        if all(not df.empty for df in data_files.values()):
-            st.success("All data files uploaded and processed successfully!")
-            # Display previews with expandable sections
-            with st.expander("View Data Previews", expanded=False):
-                st.markdown("**Market Index Data**")
-                st.dataframe(data_files['market'].head())
+    if os.path.exists(database_file):
+        try:
+            st.info(f"Loading database from '{database_file}'...")
+            database = DatabaseLoader.load_database(database_file)
+            if database.empty:
+                st.error("Failed to load the database. Please check the file.")
+                st.stop()
+            else:
+                st.success(f"Database '{database_file}' loaded successfully!")
+                st.subheader("Database Preview")
+                st.dataframe(database.head())
 
-                st.markdown("**Risk-Free Rate Data**")
-                st.dataframe(data_files['risk_free_rate'].head())
-
-                st.markdown("**Market Cap Data**")
-                st.dataframe(data_files['market_cap'].head())
-
-                st.markdown("**USD to Rial Exchange Rate Data**")
-                st.dataframe(data_files['usd_to_rial'].head())
-        else:
-            st.error("One or more data files failed to load. Please check the uploaded files.")
+            # Preprocess the database
+            symbol_data, market_returns, risk_free_rate, market_cap, usd_to_rial = DatabaseLoader.preprocess_database(database)
+            if any(df is None for df in [symbol_data, market_returns, risk_free_rate, market_cap, usd_to_rial]):
+                st.error("Preprocessing of the database failed. Please check the data.")
+                st.stop()
+            else:
+                st.success("Database preprocessing completed successfully!")
+                st.subheader("Symbol Price Data Preview")
+                st.dataframe(symbol_data.head())
+        except Exception as e:
+            st.error(f"Error loading or processing the database: {e}")
+            st.stop()
     else:
-        st.warning("Please upload all required data files.")
+        st.error(f"Database file '{database_file}' not found in the project directory.")
+        st.stop()
 
     # ==============================
     # Symbol IDs Validation
     # ==============================
     st.header("2. Symbol IDs")
     if portfolio_symbol_ids:
-        if validate_symbol_ids(portfolio_symbol_ids):
-            st.success(f"Symbol IDs: {', '.join(portfolio_symbol_ids)}")
+        # بررسی اینکه Symbol IDs وارد شده در دیتابیس وجود دارند
+        available_symbol_ids = [str(col) for col in symbol_data.columns.tolist()]
+        invalid_ids = [sid for sid in portfolio_symbol_ids if sid not in available_symbol_ids]
+        if invalid_ids:
+            st.error(f"The following Symbol IDs are not present in the database: {', '.join(invalid_ids)}")
         else:
-            st.error("Invalid symbol IDs provided. Ensure all IDs are numeric.")
+            st.success(f"All Symbol IDs are valid and available in the database.")
     else:
-        st.error("Please enter at least one symbol ID.")
+        st.error("Please enter at least one Symbol ID.")
 
     # ==============================
     # Run HRP, HERC & NCO Optimization
     # ==============================
-    if run_optimization:
-        if not all(not df.empty for df in data_files.values()):
-            st.error("Please ensure all data files are uploaded and processed successfully.")
-        elif not validate_symbol_ids(portfolio_symbol_ids):
-            st.error("Please provide valid numeric symbol IDs.")
-        else:
-            # Proceed with data fetching and preprocessing
-            with st.spinner("Fetching symbol data..."):
-                symbol_data = asyncio.run(DataFetcher.fetch_all_symbols(portfolio_symbol_ids))
+    if start_button:
+        if not os.path.exists(database_file):
+            st.error(f"Database file '{database_file}' not found.")
+            st.stop()
+        if not portfolio_symbol_ids:
+            st.error("Please enter at least one Symbol ID.")
+            st.stop()
+        available_symbol_ids = [str(col) for col in symbol_data.columns.tolist()]
+        invalid_ids = [sid for sid in portfolio_symbol_ids if sid not in available_symbol_ids]
+        if invalid_ids:
+            st.error(f"The following Symbol IDs are not present in the database: {', '.join(invalid_ids)}")
+            st.stop()
 
-            # Combine all symbol data into a single DataFrame
-            prices = pd.DataFrame()
-            for symbol_id, df in symbol_data.items():
-                if not df.empty:
-                    df = df[['date', 'close']].rename(columns={'close': symbol_id})
-                    if prices.empty:
-                        prices = df
-                    else:
-                        prices = prices.merge(df, on='date', how='inner')  # Use 'inner' to keep only overlapping dates
+        # Proceed with data extraction and preprocessing
+        try:
+            # استخراج قیمت‌ها برای Symbol IDs وارد شده
+            st.info("Extracting price data for the selected Symbol IDs...")
+            selected_prices = symbol_data[portfolio_symbol_ids].copy()
+            if selected_prices.empty:
+                st.error("Selected Symbol IDs have no price data.")
+                st.stop()
+            st.success("Price data extracted successfully!")
+            st.subheader("Selected Price Data Preview")
+            st.dataframe(selected_prices.head())
 
-            if prices.empty:
-                st.error("No price data fetched for the provided symbol IDs. Please check the symbol IDs and try again.")
+            # Extract Market Returns, Market Cap, USD to Rial, and Risk-Free Rate
+            market_returns_selected = market_returns.copy()
+            risk_free_rate_selected = risk_free_rate.copy()
+            market_cap_selected = market_cap.copy()
+            usd_to_rial_selected = usd_to_rial.copy()
+
+            # Data Preprocessing
+            st.info("Preprocessing data...")
+            preprocessor = Preprocessor()
+            X_train, X_test, y_train, y_test = preprocessor.process_data(
+                selected_prices, market_returns_selected, 
+                risk_free_rate_selected, 
+                market_cap_selected, 
+                usd_to_rial_selected
+            )
+
+            if X_train is None:
+                st.error("Data preprocessing failed. Please check your data and try again.")
+                st.stop()
             else:
-                prices = prices.set_index('date').sort_index()
-                st.success(f"Successfully fetched and combined price data. Total data points: {len(prices)}")
-                st.subheader("Price Data Preview")
-                st.dataframe(prices.head())
+                st.success("Data preprocessing completed successfully!")
+                st.subheader("Training Data Preview")
+                st.dataframe(X_train.head())
 
-                # Extract Market Returns, Market Cap, USD to Rial, and Risk-Free Rate
-                try:
-                    market_returns = data_files['market'].set_index('date')['daily_return'].rename("market_returns")
-                    risk_free_rate = data_files['risk_free_rate'].set_index('date')['risk_free_rate'].rename("risk_free_rate")
-                    market_cap = data_files['market_cap'].set_index('date')['market_cap'].rename("market_cap")
-                    usd_to_rial = data_files['usd_to_rial'].set_index('date')['usd_to_rial'].rename("usd_to_rial")
-                except KeyError as e:
-                    st.error(f"Missing required column in data files: {e}")
-                    st.stop()
+                st.subheader("Testing Data Preview")
+                st.dataframe(X_test.head())
+        except Exception as e:
+            st.error(f"Error during data extraction or preprocessing: {e}")
+            st.stop()
 
-                # Data Preprocessing
-                with st.spinner("Preprocessing data..."):
-                    preprocessor = Preprocessor()
-                    X_train, X_test, y_train, y_test = preprocessor.process_data(
-                        prices, market_returns, risk_free_rate, market_cap, usd_to_rial
-                    )
+        # ==============================
+        # Model Configuration and Training
+        # ==============================
+        st.header("3. Model Training and Evaluation")
+        evaluator = Evaluator()
 
-                if X_train is None:
-                    st.error("Data preprocessing failed. Please check your data and try again.")
+        # Define the linkage methods and distance estimators from user input
+        try:
+            linkage_methods_enum = [LinkageMethod(method) for method in linkage_methods]
+        except ValueError as ve:
+            st.error(f"Invalid linkage method selected: {ve}")
+            st.stop()
+
+        distance_estimators_list = []
+        for estimator_name in distance_estimators:
+            if estimator_name == "Pearson":
+                distance_estimators_list.append((None, "Pearson"))
+            elif estimator_name == "Kendall":
+                distance_estimators_list.append((KendallDistance(absolute=True), "Kendall"))
+            elif estimator_name == "Spearman":
+                # دریافت تنظیمات SpearmanDistance از رابط کاربری
+                spearman = SpearmanDistance(
+                    absolute=spearman_absolute,
+                    power=spearman_power
+                )
+                distance_estimators_list.append((spearman, "Spearman"))
+            elif estimator_name == "DistanceCorrelation":
+                # دریافت تنظیمات DistanceCorrelation از رابط کاربری
+                distance_corr = DistanceCorrelation(
+                    threshold=distance_correlation_threshold
+                )
+                distance_estimators_list.append((distance_corr, "DistanceCorrelation"))
+            else:
+                st.error(f"Unsupported distance estimator: {estimator_name}")
+                st.stop()
+
+        # Initialize an empty list to hold all models
+        models = []
+
+        # Iterate over each combination of linkage methods and distance estimators for HRP
+        for linkage in linkage_methods_enum:
+            for distance_estimator, distance_name in distance_estimators_list:
+                # Define a name for the model based on the linkage and distance method
+                distance_label = distance_name if distance_estimator else "Pearson"
+                model_name = f"HRP-{linkage.value.capitalize()}-{distance_label}"
+
+                # Initialize HierarchicalClustering with the current linkage method
+                hierarchical_clustering = HierarchicalClustering(linkage_method=linkage)
+
+                # Initialize HierarchicalRiskParity optimizer with the clustering estimator and distance estimator
+                optimizer = HierarchicalRiskParity(
+                    risk_measure=RiskMeasure.CVAR,
+                    distance_estimator=distance_estimator,
+                    prior_estimator=None,  # No prior used in standard HRP
+                    hierarchical_clustering_estimator=hierarchical_clustering,
+                    portfolio_params=dict(name=model_name)
+                )
+
+                # Create an OptimizerModel instance and add it to the models list
+                model = OptimizerModel(optimizer=optimizer, name=model_name)
+                models.append(model)
+
+        # ========================================
+        # اضافه کردن مدل HierarchicalEqualRiskContribution (HERC)
+        # ========================================
+        try:
+            st.info("Fitting FactorModel for HERC...")
+            factor_model = FactorModel()
+            factor_model.fit(X_train, y_train)
+            logger.info("FactorModel has been fitted.")
+            st.success("FactorModel fitted successfully!")
+        except Exception as e:
+            st.error(f"Error fitting FactorModel: {e}")
+            st.stop()
+
+        # تعریف مدل HierarchicalEqualRiskContribution (HERC)
+        try:
+            optimizer_HERC = HierarchicalEqualRiskContribution(
+                risk_measure=RiskMeasure.VARIANCE,  # می‌توانید این را بر اساس نیاز تغییر دهید
+                prior_estimator=factor_model,
+                distance_estimator=None,  # به طور پیش‌فرض PearsonDistance
+                hierarchical_clustering_estimator=HierarchicalClustering(linkage_method=LinkageMethod.WARD),
+                min_weights=0.0,  # پورتفوی بدون فروش کوتاه
+                max_weights=1.0,  # هر دارایی حداکثر 100%
+                solver='CLARABEL',
+                solver_params=None,
+                transaction_costs=0.0,
+                management_fees=0.0,
+                previous_weights=None,
+                portfolio_params=dict(name="HERC-FactorModel")
+            )
+
+            # ایجاد و اضافه کردن مدل HERC به لیست مدل‌ها
+            model_HERC = OptimizerModel(optimizer=optimizer_HERC, name="HERC-FactorModel")
+            models.append(model_HERC)
+            logger.info("HERC-FactorModel has been added to the models list.")
+            st.success("HERC-FactorModel added successfully!")
+        except Exception as e:
+            st.error(f"Error initializing HERC-FactorModel: {e}")
+            st.stop()
+
+        # ========================================
+        # اضافه کردن مدل NestedClustersOptimization (NCO)
+        # ========================================
+        try:
+            # تعریف Inner Estimator برای NCO
+            if nco_inner_estimator == "MeanRisk":
+                inner_optimizer = EqualWeighted(portfolio_params=dict(name="NCO-Inner-MeanRisk"))
+            elif nco_inner_estimator == "HierarchicalRiskParity":
+                inner_optimizer = HierarchicalRiskParity(
+                    risk_measure=RiskMeasure.CVAR,
+                    distance_estimator=None,
+                    prior_estimator=None,
+                    hierarchical_clustering_estimator=HierarchicalClustering(linkage_method=LinkageMethod.AVERAGE),
+                    portfolio_params=dict(name="NCO-Inner-HRP")
+                )
+            elif nco_inner_estimator == "DistributionallyRobustCVaR":
+                inner_optimizer = DistributionallyRobustCVaR(
+                    risk_aversion=1.0,
+                    cvar_beta=0.95,
+                    wasserstein_ball_radius=0.02,
+                    prior_estimator=factor_model,
+                    min_weights=0.0,
+                    max_weights=1.0,
+                    budget=1.0,
+                    portfolio_params=dict(name="NCO-Inner-DRCVaR"),
+                    solver='CLARABEL',
+                    solver_params=None,
+                    scale_objective=None,
+                    scale_constraints=None,
+                    save_problem=False,
+                    raise_on_failure=True
+                )
+            else:
+                st.error(f"Unsupported Inner Estimator for NCO: {nco_inner_estimator}")
+                st.stop()
+
+            # تعریف Outer Estimator برای NCO
+            if nco_outer_estimator == "MeanRisk":
+                outer_optimizer = EqualWeighted(portfolio_params=dict(name="NCO-Outer-MeanRisk"))
+            elif nco_outer_estimator == "HierarchicalRiskParity":
+                outer_optimizer = HierarchicalRiskParity(
+                    risk_measure=RiskMeasure.CVAR,
+                    distance_estimator=None,
+                    prior_estimator=None,
+                    hierarchical_clustering_estimator=HierarchicalClustering(linkage_method=LinkageMethod.AVERAGE),
+                    portfolio_params=dict(name="NCO-Outer-HRP")
+                )
+            elif nco_outer_estimator == "DistributionallyRobustCVaR":
+                outer_optimizer = DistributionallyRobustCVaR(
+                    risk_aversion=1.0,
+                    cvar_beta=0.95,
+                    wasserstein_ball_radius=0.02,
+                    prior_estimator=factor_model,
+                    min_weights=0.0,
+                    max_weights=1.0,
+                    budget=1.0,
+                    portfolio_params=dict(name="NCO-Outer-DRCVaR"),
+                    solver='CLARABEL',
+                    solver_params=None,
+                    scale_objective=None,
+                    scale_constraints=None,
+                    save_problem=False,
+                    raise_on_failure=True
+                )
+            else:
+                st.error(f"Unsupported Outer Estimator for NCO: {nco_outer_estimator}")
+                st.stop()
+
+            # تعریف Clustering Estimator برای NCO
+            if nco_clustering_method == "HierarchicalClustering":
+                clustering_estimator = HierarchicalClustering(linkage_method=LinkageMethod.WARD)
+            elif nco_clustering_method == "KMeans":
+                from sklearn.cluster import KMeans
+                clustering_estimator = KMeans(n_clusters=5, random_state=42)
+            else:
+                st.error(f"Unsupported Clustering Method for NCO: {nco_clustering_method}")
+                st.stop()
+
+            # تعریف Cross-Validation Strategy برای NCO
+            if nco_cv == "ignore":
+                cv_strategy = "ignore"
+            elif nco_cv == "5-fold":
+                from sklearn.model_selection import KFold
+                cv_strategy = KFold(n_splits=5, shuffle=False)
+            elif nco_cv == "10-fold":
+                from sklearn.model_selection import KFold
+                cv_strategy = KFold(n_splits=10, shuffle=False)
+            else:
+                st.error(f"Unsupported CV Strategy for NCO: {nco_cv}")
+                st.stop()
+
+            # تعریف Quantile Measure برای NCO
+            quantile_measure_map = {
+                "Sharpe Ratio": RatioMeasure.SHARPE_RATIO,  # اصلاح شده از RiskMeasure به RatioMeasure
+                "Sortino Ratio": RatioMeasure.SORTINO_RATIO
+            }
+            quantile_measure = quantile_measure_map.get(nco_quantile_measure, RatioMeasure.SHARPE_RATIO)
+
+            # تعریف مدل NCO
+            optimizer_NCO = NestedClustersOptimization(
+                inner_estimator=inner_optimizer,
+                outer_estimator=outer_optimizer,
+                distance_estimator=None,  # به طور پیش‌فرض PearsonDistance
+                clustering_estimator=clustering_estimator,
+                cv=cv_strategy,
+                quantile=nco_quantile,
+                quantile_measure=quantile_measure,
+                n_jobs=int(nco_n_jobs),
+                verbose=0,
+                portfolio_params=dict(name="NCO-FactorModel")
+            )
+
+            # ایجاد و اضافه کردن مدل NCO به لیست مدل‌ها
+            model_NCO = OptimizerModel(optimizer=optimizer_NCO, name="NCO-FactorModel")
+            models.append(model_NCO)
+            logger.info("NCO-FactorModel has been added to the models list.")
+            st.success("NCO-FactorModel added successfully!")
+        except Exception as e:
+            st.error(f"Error initializing NCO-FactorModel: {e}")
+            st.stop()
+
+        # ========================================
+        # اضافه کردن مدل DistributionallyRobustCVaR
+        # ========================================
+        try:
+            optimizer_drcvar = DistributionallyRobustCVaR(
+                risk_aversion=risk_aversion,
+                cvar_beta=cvar_beta,
+                wasserstein_ball_radius=wasserstein_ball_radius,
+                prior_estimator=factor_model,
+                min_weights=0.0,
+                max_weights=1.0,
+                budget=1.0,
+                portfolio_params=dict(name="DistributionallyRobustCVaR-Factor-Model"),
+                solver='CLARABEL',
+                solver_params=None,
+                scale_objective=None,
+                scale_constraints=None,
+                save_problem=False,
+                raise_on_failure=True
+            )
+            model_drcvar = OptimizerModel(optimizer=optimizer_drcvar, name="DistributionallyRobustCVaR-Factor-Model")
+            models.append(model_drcvar)
+            logger.info("DistributionallyRobustCVaR-Factor-Model has been added to the models list.")
+            st.success("DistributionallyRobustCVaR-Factor-Model added successfully!")
+        except Exception as e:
+            st.error(f"Error initializing DistributionallyRobustCVaR-Factor-Model: {e}")
+            st.stop()
+
+        # Fit Models
+        try:
+            st.info("Fitting models...")
+            for model in models:
+                # مدل‌هایی که در نامشان 'Factor' وجود دارد، از y_train استفاده می‌کنند
+                if "Factor" in model.name:
+                    model.fit(X_train, y_train)
                 else:
-                    st.success("Data preprocessing completed successfully!")
-                    st.subheader("Training Data Preview")
-                    st.dataframe(X_train.head())
+                    model.fit(X_train)
+            st.success("All models have been fitted successfully!")
+        except Exception as e:
+            st.error(f"Error fitting models: {e}")
+            st.stop()
 
-                    st.subheader("Testing Data Preview")
-                    st.dataframe(X_test.head())
+        # Benchmarking with Equal Weighted Estimator
+        try:
+            st.info("Fitting Benchmark Equal Weighted model...")
+            bench_optimizer = EqualWeighted(portfolio_params=dict(name="EqualWeighted"))
+            benchmark = OptimizerModel(optimizer=bench_optimizer, name="EqualWeighted")
+            benchmark.fit(X_train)
+            models.append(benchmark)
+            st.success("Benchmark Equal Weighted model has been fitted and added successfully!")
+        except Exception as e:
+            st.error(f"Error fitting benchmark model: {e}")
+            st.stop()
 
-                    # ==============================
-                    # Model Configuration and Training
-                    # ==============================
-                    st.header("3. Model Training and Evaluation")
-                    evaluator = Evaluator()
+        # Risk Contribution Analysis and Dendrograms
+        st.subheader("Risk Contribution Analysis and Dendrograms")
+        for model in models[:-1]:  # Exclude benchmark
+            st.markdown(f"### Model: {model.name}")
+            portfolio = model.predict(X_train)
+            if portfolio is not None:
+                evaluator.analyze_risk_contribution(portfolio, measure=model.risk_measure)
+                model.plot_dendrogram(heatmap=True)
+            else:
+                st.warning(f"Could not generate risk contribution for model '{model.name}'.")
 
-                    # Define the linkage methods and distance estimators from user input
-                    linkage_methods_enum = [LinkageMethod(method) for method in linkage_methods]
-                    distance_estimators_list = []
-                    for estimator_name in distance_estimators:
-                        if estimator_name == "Pearson":
-                            distance_estimators_list.append((None, "Pearson"))
-                        elif estimator_name == "Kendall":
-                            distance_estimators_list.append((KendallDistance(absolute=True), "Kendall"))
-                        elif estimator_name == "Spearman":
-                            # دریافت تنظیمات SpearmanDistance از رابط کاربری
-                            spearman = SpearmanDistance(
-                                absolute=spearman_absolute,
-                                power=spearman_power
-                            )
-                            distance_estimators_list.append((spearman, "Spearman"))
-                        elif estimator_name == "DistanceCorrelation":
-                            # دریافت تنظیمات DistanceCorrelation از رابط کاربری
-                            distance_corr = DistanceCorrelation(
-                                threshold=distance_correlation_threshold
-                            )
-                            distance_estimators_list.append((distance_corr, "DistanceCorrelation"))
-                        else:
-                            st.error(f"Unsupported distance estimator: {estimator_name}")
-                            st.stop()
+        # ==============================
+        # Prediction on Test Set and Evaluation
+        # ==============================
+        st.header("4. Portfolio Prediction and Evaluation")
+        population_test = Population([])
+        for model in models:
+            portfolio = model.predict(X_test)
+            if portfolio is not None:
+                population_test.append(portfolio)
+                logger.info(f"Appended portfolio from model '{model.name}' to population.")
+            else:
+                logger.warning(f"Skipped appending portfolio from model '{model.name}' due to prediction failure.")
 
-                    # Initialize an empty list to hold all models
-                    models = []
+        # Plot Cumulative Returns
+        st.subheader("Cumulative Returns")
+        evaluator.plot_cumulative_returns(population_test)
 
-                    # Iterate over each combination of linkage methods and distance estimators for HRP
-                    for linkage in linkage_methods_enum:
-                        for distance_estimator, distance_name in distance_estimators_list:
-                            # Define a name for the model based on the linkage and distance method
-                            distance_label = distance_name if distance_estimator else "Pearson"
-                            model_name = f"HRP-{linkage.value.capitalize()}-{distance_label}"
+        # Plot Portfolio Composition
+        st.subheader("Portfolio Composition")
+        evaluator.plot_composition(population_test)
 
-                            # Initialize HierarchicalClustering with the current linkage method
-                            hierarchical_clustering = HierarchicalClustering(linkage_method=linkage)
+        # Print Summary Statistics and Retrieve Summary DataFrame
+        st.subheader("Summary Statistics")
+        summary = evaluator.print_summary(population_test)
 
-                            # Initialize HierarchicalRiskParity optimizer with the clustering estimator and distance estimator
-                            optimizer = HierarchicalRiskParity(
-                                risk_measure=RiskMeasure.CVAR,
-                                distance_estimator=distance_estimator,
-                                prior_estimator=None,  # No prior used in standard HRP
-                                hierarchical_clustering_estimator=hierarchical_clustering,
-                                portfolio_params=dict(name=model_name),
-                                min_weights=min_weights,
-                                max_weights=max_weights,
-                                transaction_costs=transaction_costs,
-                                management_fees=management_fees
-                            )
+        if summary is None:
+            st.error("Summary statistics could not be generated.")
+        else:
+            # ==============================
+            # Export Optimized Portfolios and Rank Them
+            # ==============================
+            st.header("5. Export Optimized Portfolios")
 
-                            # Create an OptimizerModel instance and add it to the models list
-                            model = OptimizerModel(optimizer=optimizer, name=model_name)
-                            models.append(model)
+            try:
+                # Initialize an empty dictionary to store weights
+                portfolio_weights = {}
 
-                    # ========================================
-                    # اضافه کردن مدل HierarchicalEqualRiskContribution (HERC)
-                    # ========================================
-
-                    # تعریف و آموزش FactorModel
-                    factor_model = FactorModel()
-                    factor_model.fit(X_train, y_train)
-                    logger.info("FactorModel has been fitted.")
-
-                    # تعریف مدل HierarchicalEqualRiskContribution (HERC)
-                    optimizer_HERC = HierarchicalEqualRiskContribution(
-                        risk_measure=RiskMeasure.VARIANCE,  # می‌توانید این را بر اساس نیاز تغییر دهید
-                        prior_estimator=factor_model,
-                        distance_estimator=None,  # به طور پیش‌فرض PearsonDistance
-                        hierarchical_clustering_estimator=HierarchicalClustering(linkage_method=LinkageMethod.WARD),
-                        portfolio_params=dict(name="HERC-FactorModel"),
-                        min_weights=min_weights,
-                        max_weights=max_weights,
-                        transaction_costs=transaction_costs,
-                        management_fees=management_fees,
-                        solver='CLARABEL',
-                        solver_params=None,
-                        previous_weights=None
-                    )
-
-                    # ایجاد و اضافه کردن مدل HERC به لیست مدل‌ها
-                    model_HERC = OptimizerModel(optimizer=optimizer_HERC, name="HERC-FactorModel")
-                    models.append(model_HERC)
-                    logger.info("HERC-FactorModel has been added to the models list.")
-
-                    # ========================================
-                    # اضافه کردن مدل NestedClustersOptimization (NCO)
-                    # ========================================
-
-                    # تعریف Inner Estimator برای NCO
-                    if nco_inner_estimator == "MeanRisk":
-                        inner_optimizer = EqualWeighted(portfolio_params=dict(name="NCO-Inner-MeanRisk"))
-                    elif nco_inner_estimator == "HierarchicalRiskParity":
-                        inner_optimizer = HierarchicalRiskParity(
-                            risk_measure=RiskMeasure.CVAR,
-                            distance_estimator=None,
-                            prior_estimator=None,
-                            hierarchical_clustering_estimator=HierarchicalClustering(linkage_method=LinkageMethod.AVERAGE),
-                            portfolio_params=dict(name="NCO-Inner-HRP"),
-                            min_weights=min_weights,
-                            max_weights=max_weights,
-                            transaction_costs=transaction_costs,
-                            management_fees=management_fees
-                        )
-                    elif nco_inner_estimator == "DistributionallyRobustCVaR":
-                        inner_optimizer = DistributionallyRobustCVaR(
-                            risk_aversion=1.0,
-                            cvar_beta=0.95,
-                            wasserstein_ball_radius=0.02,
-                            prior_estimator=factor_model,
-                            min_weights=min_weights,
-                            max_weights=max_weights,
-                            budget=1.0,
-                            portfolio_params=dict(name="NCO-Inner-DRCVaR"),
-                            solver='CLARABEL',
-                            solver_params=None,
-                            scale_objective=None,
-                            scale_constraints=None,
-                            save_problem=False,
-                            raise_on_failure=True,
-                            transaction_costs=transaction_costs,
-                            management_fees=management_fees
-                        )
+                # Iterate over each model and extract weights
+                for model in models:
+                    # Predict portfolio on the training set to get the weights
+                    portfolio = model.predict(X_train)
+                    if portfolio is not None:
+                        # Ensure weights are a Series with symbol IDs as index
+                        weights = pd.Series(portfolio.weights, index=X_train.columns)
+                        portfolio_weights[model.name] = weights
+                        logger.info(f"Extracted weights for model '{model.name}'.")
                     else:
-                        st.error(f"Unsupported Inner Estimator for NCO: {nco_inner_estimator}")
-                        st.stop()
+                        logger.warning(f"Cannot extract weights for model '{model.name}' as prediction failed.")
 
-                    # تعریف Outer Estimator برای NCO
-                    if nco_outer_estimator == "MeanRisk":
-                        outer_optimizer = EqualWeighted(portfolio_params=dict(name="NCO-Outer-MeanRisk"))
-                    elif nco_outer_estimator == "HierarchicalRiskParity":
-                        outer_optimizer = HierarchicalRiskParity(
-                            risk_measure=RiskMeasure.CVAR,
-                            distance_estimator=None,
-                            prior_estimator=None,
-                            hierarchical_clustering_estimator=HierarchicalClustering(linkage_method=LinkageMethod.AVERAGE),
-                            portfolio_params=dict(name="NCO-Outer-HRP"),
-                            min_weights=min_weights,
-                            max_weights=max_weights,
-                            transaction_costs=transaction_costs,
-                            management_fees=management_fees
-                        )
-                    elif nco_outer_estimator == "DistributionallyRobustCVaR":
-                        outer_optimizer = DistributionallyRobustCVaR(
-                            risk_aversion=1.0,
-                            cvar_beta=0.95,
-                            wasserstein_ball_radius=0.02,
-                            prior_estimator=factor_model,
-                            min_weights=min_weights,
-                            max_weights=max_weights,
-                            budget=1.0,
-                            portfolio_params=dict(name="NCO-Outer-DRCVaR"),
-                            solver='CLARABEL',
-                            solver_params=None,
-                            scale_objective=None,
-                            scale_constraints=None,
-                            save_problem=False,
-                            raise_on_failure=True,
-                            transaction_costs=transaction_costs,
-                            management_fees=management_fees
-                        )
-                    else:
-                        st.error(f"Unsupported Outer Estimator for NCO: {nco_outer_estimator}")
-                        st.stop()
+                # Create a DataFrame from the weights dictionary
+                weights_df = pd.DataFrame(portfolio_weights).transpose()
 
-                    # تعریف Clustering Estimator برای NCO
-                    if nco_clustering_method == "HierarchicalClustering":
-                        clustering_estimator = HierarchicalClustering(linkage_method=LinkageMethod.WARD)
-                    elif nco_clustering_method == "KMeans":
-                        from sklearn.cluster import KMeans
-                        clustering_estimator = KMeans(n_clusters=5, random_state=42)
-                    else:
-                        st.error(f"Unsupported Clustering Method for NCO: {nco_clustering_method}")
-                        st.stop()
+                # Reset index to have model names as a column
+                weights_df = weights_df.reset_index().rename(columns={'index': 'Model'})
 
-                    # تعریف Cross-Validation Strategy برای NCO
-                    if nco_cv == "ignore":
-                        cv_strategy = "ignore"
-                    elif nco_cv == "5-fold":
-                        from sklearn.model_selection import KFold
-                        cv_strategy = KFold(n_splits=5, shuffle=False)
-                    elif nco_cv == "10-fold":
-                        from sklearn.model_selection import KFold
-                        cv_strategy = KFold(n_splits=10, shuffle=False)
-                    else:
-                        st.error(f"Unsupported CV Strategy for NCO: {nco_cv}")
-                        st.stop()
+                # Ranking based on Annualized Sharpe Ratio
+                sharpe_ratios = summary.loc["Annualized Sharpe Ratio"]
+                ranking_df = sharpe_ratios.reset_index().rename(columns={'index': 'Model', 'Annualized Sharpe Ratio': 'Sharpe Ratio'})
+                ranking_df['Rank'] = ranking_df['Sharpe Ratio'].rank(ascending=False, method='dense').astype(int)
+                ranking_df = ranking_df.sort_values('Rank')
 
-                    # تعریف Quantile Measure برای NCO
-                    quantile_measure_map = {
-                        "Sharpe Ratio": RatioMeasure.SHARPE_RATIO,  # اصلاح شده از RiskMeasure به RatioMeasure
-                        "Sortino Ratio": RatioMeasure.SORTINO_RATIO
-                    }
-                    quantile_measure = quantile_measure_map.get(nco_quantile_measure, RatioMeasure.SHARPE_RATIO)
+                # Merge ranking into weights_df
+                weights_df = weights_df.merge(ranking_df[['Model', 'Sharpe Ratio', 'Rank']], on='Model', how='left')
 
-                    # تعریف مدل NCO
-                    optimizer_NCO = NestedClustersOptimization(
-                        inner_estimator=inner_optimizer,
-                        outer_estimator=outer_optimizer,
-                        distance_estimator=None,  # به طور پیش‌فرض PearsonDistance
-                        clustering_estimator=clustering_estimator,
-                        cv=cv_strategy,
-                        quantile=nco_quantile,
-                        quantile_measure=quantile_measure,
-                        n_jobs=int(nco_n_jobs),
-                        verbose=0,
-                        portfolio_params=dict(name="NCO-FactorModel"),
-                        min_weights=min_weights,
-                        max_weights=max_weights,
-                        transaction_costs=transaction_costs,
-                        management_fees=management_fees
-                    )
+                # Reorder columns to have 'Rank' first
+                weights_df = weights_df[['Rank', 'Model'] + [col for col in weights_df.columns if col not in ['Rank', 'Model']]]
 
-                    # ایجاد و اضافه کردن مدل NCO به لیست مدل‌ها
-                    model_NCO = OptimizerModel(optimizer=optimizer_NCO, name="NCO-FactorModel")
-                    models.append(model_NCO)
-                    logger.info("NCO-FactorModel has been added to the models list.")
+                # Display the weights DataFrame
+                st.subheader("Optimized Portfolio Weights")
+                st.dataframe(weights_df)
 
-                    # تعریف مدل DistributionallyRobustCVaR با FactorModel به عنوان prior_estimator
-                    optimizer_drcvar = DistributionallyRobustCVaR(
-                        risk_aversion=risk_aversion,
-                        cvar_beta=cvar_beta,
-                        wasserstein_ball_radius=wasserstein_ball_radius,
-                        prior_estimator=factor_model,
-                        min_weights=min_weights,
-                        max_weights=max_weights,
-                        budget=1.0,
-                        portfolio_params=dict(name="DistributionallyRobustCVaR-Factor-Model"),
-                        solver='CLARABEL',
-                        solver_params=None,
-                        scale_objective=None,
-                        scale_constraints=None,
-                        save_problem=False,
-                        raise_on_failure=True,
-                        transaction_costs=transaction_costs,
-                        management_fees=management_fees
-                    )
-                    model_drcvar = OptimizerModel(optimizer=optimizer_drcvar, name="DistributionallyRobustCVaR-Factor-Model")
-                    models.append(model_drcvar)
+                # Display the ranking
+                st.subheader("Portfolio Rankings based on Annualized Sharpe Ratio")
+                st.dataframe(ranking_df.sort_values('Rank'))
 
-                    # Fit Models
-                    with st.spinner("Fitting models..."):
-                        for model in models:
-                            # مدل‌هایی که در نامشان 'Factor' وجود دارد، از y_train استفاده می‌کنند
-                            if "Factor" in model.name:
-                                model.fit(X_train, y_train)
-                            else:
-                                model.fit(X_train)
+                # Export to CSV and Excel with timestamp
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                csv = weights_df.to_csv(index=False)
 
-                    st.success("All models have been fitted successfully!")
+                # Create Excel bytes
+                output = BytesIO()
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    weights_df.to_excel(writer, index=False)
+                excel_data = output.getvalue()
 
-                    # Benchmarking with Equal Weighted Estimator
-                    bench_optimizer = EqualWeighted(portfolio_params=dict(name="EqualWeighted"))
-                    benchmark = OptimizerModel(optimizer=bench_optimizer, name="EqualWeighted")
-                    benchmark.fit(X_train)
-                    models.append(benchmark)
+                st.markdown(get_table_download_link(weights_df, f'Optimized_Portfolio_Weights_{timestamp}.csv', '📥 Download CSV'), unsafe_allow_html=True)
+                st.markdown(get_table_download_link(weights_df, f'Optimized_Portfolio_Weights_{timestamp}.xlsx', '📥 Download Excel'), unsafe_allow_html=True)
 
-                    # Risk Contribution Analysis and Dendrograms
-                    st.subheader("Risk Contribution Analysis and Dendrograms")
-                    for model in models[:-1]:  # Exclude benchmark
-                        st.markdown(f"### Model: {model.name}")
-                        portfolio = model.predict(X_train)
-                        if portfolio is not None:
-                            evaluator.analyze_risk_contribution(portfolio, measure=model.risk_measure)
-                            model.plot_dendrogram(heatmap=True)
-                        else:
-                            st.warning(f"Could not generate risk contribution for model '{model.name}'.")
-
-                    # ==============================
-                    # Prediction on Test Set and Evaluation
-                    # ==============================
-                    st.header("4. Portfolio Prediction and Evaluation")
-                    population_test = Population([])
-                    for model in models:
-                        portfolio = model.predict(X_test)
-                        if portfolio is not None:
-                            population_test.append(portfolio)
-                            logger.info(f"Appended portfolio from model '{model.name}' to population.")
-                        else:
-                            logger.warning(f"Skipped appending portfolio from model '{model.name}' due to prediction failure.")
-
-                    # Plot Cumulative Returns
-                    st.subheader("Cumulative Returns")
-                    evaluator.plot_cumulative_returns(population_test)
-
-                    # Plot Portfolio Composition
-                    st.subheader("Portfolio Composition")
-                    evaluator.plot_composition(population_test)
-
-                    # Print Summary Statistics and Retrieve Summary DataFrame
-                    st.subheader("Summary Statistics")
-                    summary = evaluator.print_summary(population_test)
-
-                    if summary is None:
-                        st.error("Summary statistics could not be generated.")
-                    else:
-                        # ==============================
-                        # Export Optimized Portfolios and Rank Them
-                        # ==============================
-                        st.header("5. Export Optimized Portfolios")
-
-                        try:
-                            # Initialize an empty dictionary to store weights
-                            portfolio_weights = {}
-
-                            # Iterate over each model and extract weights
-                            for model in models:
-                                # Predict portfolio on the training set to get the weights
-                                portfolio = model.predict(X_train)
-                                if portfolio is not None:
-                                    # Ensure weights are a Series with symbol IDs as index
-                                    weights = pd.Series(portfolio.weights, index=X_train.columns)
-                                    portfolio_weights[model.name] = weights
-                                    logger.info(f"Extracted weights for model '{model.name}'.")
-                                else:
-                                    logger.warning(f"Cannot extract weights for model '{model.name}' as prediction failed.")
-
-                            # Create a DataFrame from the weights dictionary
-                            weights_df = pd.DataFrame(portfolio_weights).transpose()
-
-                            # Reset index to have model names as a column
-                            weights_df = weights_df.reset_index().rename(columns={'index': 'Model'})
-
-                            # Ranking based on Annualized Sharpe Ratio
-                            sharpe_ratios = summary.loc["Annualized Sharpe Ratio"]
-                            ranking_df = sharpe_ratios.reset_index().rename(columns={'index': 'Model', 'Annualized Sharpe Ratio': 'Sharpe Ratio'})
-                            ranking_df['Rank'] = ranking_df['Sharpe Ratio'].rank(ascending=False, method='dense').astype(int)
-                            ranking_df = ranking_df.sort_values('Rank')
-
-                            # Merge ranking into weights_df
-                            weights_df = weights_df.merge(ranking_df[['Model', 'Sharpe Ratio', 'Rank']], on='Model', how='left')
-
-                            # Reorder columns to have 'Rank' first
-                            weights_df = weights_df[['Rank', 'Model'] + [col for col in weights_df.columns if col not in ['Rank', 'Model']]]
-
-                            # Display the weights DataFrame
-                            st.subheader("Optimized Portfolio Weights")
-                            st.dataframe(weights_df)
-
-                            # Display the ranking
-                            st.subheader("Portfolio Rankings based on Annualized Sharpe Ratio")
-                            st.dataframe(ranking_df.sort_values('Rank'))
-
-                            # Export to CSV and Excel with timestamp
-                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                            csv = weights_df.to_csv(index=False)
-
-                            # Create Excel bytes
-                            output = BytesIO()
-                            with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                                weights_df.to_excel(writer, index=False)
-                            excel_data = output.getvalue()
-
-                            st.markdown(get_table_download_link(weights_df, f'Optimized_Portfolio_Weights_{timestamp}.csv', '📥 Download CSV'), unsafe_allow_html=True)
-                            st.markdown(get_table_download_link(weights_df, f'Optimized_Portfolio_Weights_{timestamp}.xlsx', '📥 Download Excel'), unsafe_allow_html=True)
-
-                            logger.info(f"Exported optimized portfolio weights to 'Optimized_Portfolio_Weights_{timestamp}.csv' and '.xlsx'.")
-                        except Exception as e:
-                            logger.error(f"Error exporting portfolio weights: {e}")
-                            st.error("An error occurred while exporting portfolio weights.")
+                logger.info(f"Exported optimized portfolio weights to 'Optimized_Portfolio_Weights_{timestamp}.csv' and '.xlsx'.")
+            except Exception as e:
+                logger.error(f"Error exporting portfolio weights: {e}")
+                st.error("An error occurred while exporting portfolio weights.")
 
 # %%
 # Execute Main Function
