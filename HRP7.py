@@ -20,7 +20,7 @@ import re
 import pandas as pd
 import numpy as np
 import streamlit as st
-from fuzzywuzzy import fuzz, process
+from thefuzz import fuzz, process
 from plotly.io import to_html
 from sklearn.model_selection import train_test_split
 from tsetmc_api.symbol import Symbol  # Ensure this is the correct import for the Symbol class
